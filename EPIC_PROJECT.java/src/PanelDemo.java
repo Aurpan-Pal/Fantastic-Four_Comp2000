@@ -15,6 +15,38 @@ public class PanelDemo {
     // Treatment time also counts down by this much every tick.
     private static final int TICK_MS = 50;
 
+    // ---------- checks used by count() ----------
+    // Each one answers a yes/no question about one person. The type in <...>
+    // says what kind of item it checks.
+
+    private static final Check<Healthy> INFECTED = new Check<Healthy>() {
+        @Override
+        public boolean test(Healthy person) {
+            return person.isInfected();
+        }
+    };
+
+    private static final Check<Healthy> IN_TREATMENT = new Check<Healthy>() {
+        @Override
+        public boolean test(Healthy person) {
+            return person.isInTreatment();
+        }
+    };
+
+    private static final Check<Healthy> RECOVERED = new Check<Healthy>() {
+        @Override
+        public boolean test(Healthy person) {
+            return person.isRecovered();
+        }
+    };
+
+    private static final Check<Healthy> DEAD = new Check<Healthy>() {
+        @Override
+        public boolean test(Healthy person) {
+            return person.isDead();
+        }
+    };
+
     public static void main(String[] args) {
 
         // ---------- build the healthy people ----------
@@ -95,7 +127,9 @@ public class PanelDemo {
                 // matching colour.
                 for (int i = 0; i < healthyPeople.length; i++) {
 
-                    if (healthyPeople[i].isRecovered()) {
+                    if (healthyPeople[i].isDead()) {
+                        bg.setColor(Color.gray);
+                    } else if (healthyPeople[i].isRecovered()) {
                         bg.setColor(Color.cyan);
                     } else if (healthyPeople[i].isInfected()) {
                         bg.setColor(Color.yellow);
@@ -115,12 +149,20 @@ public class PanelDemo {
                                 DOT_SIZE, DOT_SIZE);
                 }
 
-                // Live counts in the top-left corner.
+                // Live counts in the top-left corner, all from the one
+                // generic count() method.
+                int infected    = count(healthyPeople, INFECTED);
+                int inTreatment = count(healthyPeople, IN_TREATMENT);
+                int recovered   = count(healthyPeople, RECOVERED);
+                int dead        = count(healthyPeople, DEAD);
+                int healthy     = healthyPeople.length - infected - recovered - dead;
+
                 bg.setColor(Color.white);
-                bg.drawString("Healthy: " + countHealthy(healthyPeople)
-                        + "    Infected: " + countInfected(healthyPeople)
-                        + " (in treatment: " + countInTreatment(healthyPeople) + ")"
-                        + "    Recovered: " + countRecovered(healthyPeople), 10, 20);
+                bg.drawString("Healthy: " + healthy
+                        + "    Infected: " + infected
+                        + " (in treatment: " + inTreatment + ")"
+                        + "    Recovered: " + recovered
+                        + "    Dead: " + dead, 10, 20);
 
                 bg.dispose();
                 g.drawImage(buffer, 0, 0, null);
@@ -162,11 +204,12 @@ public class PanelDemo {
                     if (healthyPeople[i].isInTreatment()) {
                         // Patients stay put inside the centre until they are cured.
                         healthyPeople[i].updateTreatment(TICK_MS);
-                    } else {
+                    } else if (!healthyPeople[i].isDead()) {
                         // The speed comes from the person, not from a number typed
                         // here, so an infected person slows down on its own.
                         healthyPeople[i].moveRandom(healthyPeople[i].getSpeed(), SIM_WIDTH - DOT_SIZE, SIM_HEIGHT - DOT_SIZE);
                     }
+                    // The dead stay where they fell.
                 }
 
                 for (int i = 0; i < viruses.length; i++) {
@@ -183,20 +226,33 @@ public class PanelDemo {
         timer.start();
     }
 
-    // Every person who can still catch the virus, against every virus.
+    // Every living person against every virus. What a new contact does is
+    // decided by the person (see Healthy.infect()): a healthy person gets
+    // infected, and an infected person hit a second time dies.
     private static void checkInfections(Healthy[] healthyPeople, Virus[] viruses) {
 
         for (int i = 0; i < healthyPeople.length; i++) {
 
-            if (!healthyPeople[i].canBeInfected()) {
-                continue;                       // already infected, or recovered and immune
+            if (healthyPeople[i].isDead()) {
+                continue;
             }
 
-            for (int j = 0; j < viruses.length; j++) {
+            boolean touching = false;
 
+            for (int j = 0; j < viruses.length; j++) {
                 if (isTouching(healthyPeople[i], viruses[j])) {
-                    healthyPeople[i].infect();  // same object, flag flipped
+                    touching = true;
                     break;
+                }
+            }
+
+            if (healthyPeople[i].isNewContact(touching)) {
+                try {
+                    healthyPeople[i].infect();
+                } catch (PersonDiedException ex) {
+                    // A second hit while already infected is fatal.
+                    healthyPeople[i].die();
+                    System.out.println(ex.getMessage());
                 }
             }
         }
@@ -239,44 +295,18 @@ public class PanelDemo {
         return (dx * dx + dy * dy) <= (DOT_SIZE * DOT_SIZE);
     }
 
-    // Infected includes people who are currently being treated.
-    private static int countInfected(Healthy[] healthyPeople) {
+    // Generic method: counts how many items in an array pass a check.
+    // <T> is filled in by Java from the arguments, so it works for any type:
+    // here it's Healthy[] with a Check<Healthy>.
+    private static <T> int count(T[] items, Check<T> check) {
 
-        int count = 0;
+        int total = 0;
 
-        for (int i = 0; i < healthyPeople.length; i++) {
-            if (healthyPeople[i].isInfected()) {
-                count++;
+        for (int i = 0; i < items.length; i++) {
+            if (check.test(items[i])) {
+                total++;
             }
         }
-        return count;
-    }
-
-    private static int countInTreatment(Healthy[] healthyPeople) {
-
-        int count = 0;
-
-        for (int i = 0; i < healthyPeople.length; i++) {
-            if (healthyPeople[i].isInTreatment()) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static int countRecovered(Healthy[] healthyPeople) {
-
-        int count = 0;
-
-        for (int i = 0; i < healthyPeople.length; i++) {
-            if (healthyPeople[i].isRecovered()) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static int countHealthy(Healthy[] healthyPeople) {
-        return healthyPeople.length - countInfected(healthyPeople) - countRecovered(healthyPeople);
+        return total;
     }
 }
