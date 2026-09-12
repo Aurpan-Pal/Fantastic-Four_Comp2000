@@ -2,7 +2,7 @@
 
 A Java simulation of a virus spreading through a city. People move around randomly and get infected when they touch a virus. Infected people can recover at hospitals and medical camps, but if they touch a virus again before that, they die.
 
-Made for COMP2000 (Object Oriented Programming Practices) at Macquarie University, Semester 2 2026.
+
 
 ## How to run
 
