@@ -3,7 +3,7 @@ import java.awt.*;
 /**
  * Anywhere an infected person can go to get better.
  *
- * This is the contract: every recovery centre must be able to do these four
+ * This is the contract: every recovery centre must be able to do these
  * things. PanelDemo only ever uses this type, so it never needs to know
  * whether it is dealing with a hospital or a medical camp.
  */
@@ -20,4 +20,8 @@ public interface RecoveryCentre {
 
     /** Draws the centre on the map. */
     void draw(Graphics g);
+
+    /** The middle of the centre, so people can walk towards it. */
+    int getCentreX();
+    int getCentreY();
 }

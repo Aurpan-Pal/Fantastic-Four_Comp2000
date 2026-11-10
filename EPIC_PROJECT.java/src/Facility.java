@@ -42,6 +42,16 @@ public abstract class Facility implements RecoveryCentre {
     }
 
     @Override
+    public int getCentreX(){
+        return xPos + size / 2;
+    }
+
+    @Override
+    public int getCentreY(){
+        return yPos + size / 2;
+    }
+
+    @Override
     public void draw(Graphics g){
         g.setColor(getColor());
         g.fillRect(xPos, yPos, size, size);

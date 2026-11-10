@@ -1,5 +1,9 @@
 import java.awt.*;
 import java.awt.event.*;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class PanelDemo {
 
@@ -11,81 +15,62 @@ public class PanelDemo {
     private static final int HEALTHY_COUNT = 70;
     private static final int VIRUS_COUNT   = 10;
 
+    // Out of every 100 people, roughly how many follow health advice: the
+    // moment they are infected they walk straight to the nearest recovery
+    // centre. Everyone else keeps wandering. The live death rates on screen
+    // show what difference this makes.
+    private static final int ADVICE_PERCENT = 40;
+
     // How often the timer fires, in milliseconds. 50ms = 20 ticks a second.
     // Treatment time also counts down by this much every tick.
     private static final int TICK_MS = 50;
 
-    // ---------- checks used by count() ----------
-    // Each one answers a yes/no question about one person. The type in <...>
-    // says what kind of item it checks.
-
-    private static final Check<Healthy> INFECTED = new Check<Healthy>() {
-        @Override
-        public boolean test(Healthy person) {
-            return person.isInfected();
-        }
-    };
-
-    private static final Check<Healthy> IN_TREATMENT = new Check<Healthy>() {
-        @Override
-        public boolean test(Healthy person) {
-            return person.isInTreatment();
-        }
-    };
-
-    private static final Check<Healthy> RECOVERED = new Check<Healthy>() {
-        @Override
-        public boolean test(Healthy person) {
-            return person.isRecovered();
-        }
-    };
-
-    private static final Check<Healthy> DEAD = new Check<Healthy>() {
-        @Override
-        public boolean test(Healthy person) {
-            return person.isDead();
-        }
-    };
+    // Furthest a dot's top-left corner can go and still be fully on screen.
+    private static final int MAX_X = SIM_WIDTH  - DOT_SIZE;
+    private static final int MAX_Y = SIM_HEIGHT - DOT_SIZE;
 
     public static void main(String[] args) {
-
-        // ---------- build the healthy people ----------
-        // Still Healthy[], not Person[]. Nothing ever gets swapped out of this
-        // array -- a person who catches the virus is the SAME object with a
-        // flag flipped, so the array type never has to change.
-        final Healthy[] healthyPeople = new Healthy[HEALTHY_COUNT];
-
-        for (int i = 0; i < healthyPeople.length; i++) {
-
-            int x = (int)(Math.random() * (SIM_WIDTH  - DOT_SIZE));
-            int y = (int)(Math.random() * (SIM_HEIGHT - DOT_SIZE));
-            int age = 18 + (int)(Math.random() * 50);
-
-            healthyPeople[i] = new Healthy("P" + (i + 1), age, x, y);
-        }
-
-        // ---------- build the viruses ----------
-        final Virus[] viruses = new Virus[VIRUS_COUNT];
-
-        for (int i = 0; i < viruses.length; i++) {
-
-            int x = (int)(Math.random() * (SIM_WIDTH  - DOT_SIZE));
-            int y = (int)(Math.random() * (SIM_HEIGHT - DOT_SIZE));
-            int percentage = (int)(Math.random() * 101);
-
-            viruses[i] = new Virus("Zombie Virus", percentage, x, y);
-        }
 
         // ---------- build the recovery centres ----------
         // The array type is the interface, so one array holds both kinds.
         // Positions are fixed so the centres never overlap each other.
-        final RecoveryCentre[] centres = new RecoveryCentre[5];
+        final RecoveryCentre[] centres = {
+            new Hospital(250, 200),
+            new Hospital(900, 550),
+            new MedicalCamp(150, 620),
+            new MedicalCamp(600, 380),
+            new MedicalCamp(1000, 150)
+        };
 
-        centres[0] = new Hospital(250, 200);
-        centres[1] = new Hospital(900, 550);
-        centres[2] = new MedicalCamp(150, 620);
-        centres[3] = new MedicalCamp(600, 380);
-        centres[4] = new MedicalCamp(1000, 150);
+        // STRATEGY: one shared "walk to the nearest centre" route for everyone
+        // who follows advice. It holds no per-person data, so one is enough.
+        final MovementStrategy goToCare = new HeadToNearestCentre(centres);
+
+        // OBSERVERS: every person reports health changes to these two.
+        // The stats tracker is a full class; the logger is short enough to be
+        // a lambda, because StatusObserver is a functional interface.
+        final OutbreakStats stats = new OutbreakStats();
+        final StatusObserver deathLogger = (person, from, to) -> {
+            if (to instanceof DeadState) {
+                System.out.println(person.getName() + " has died");
+            }
+        };
+
+        // ---------- build the healthy people ----------
+        // A stream of the numbers 0..69, each turned into a person, collected
+        // into an array. Healthy[]::new tells toArray what type of array to make.
+        // Kept sequential on purpose: Person's id counter (nextId++) is not
+        // thread-safe, so building people in parallel could give two the same id.
+        final Healthy[] healthyPeople = IntStream.range(0, HEALTHY_COUNT)
+                .mapToObj(i -> makePerson(i, goToCare, stats, deathLogger))
+                .toArray(Healthy[]::new);
+
+        // ---------- build the viruses ----------
+        final Virus[] viruses = IntStream.range(0, VIRUS_COUNT)
+                .mapToObj(i -> new Virus("Zombie Virus",
+                                         (int)(Math.random() * 101),
+                                         randomX(), randomY()))
+                .toArray(Virus[]::new);
 
         Frame f = new Frame("Life - Epidemic Simulation");
         f.setLayout(null);
@@ -119,50 +104,26 @@ public class PanelDemo {
 
                 // Centres first, so the dots are drawn on top of them and
                 // people being treated stay visible.
-                for (int i = 0; i < centres.length; i++) {
-                    centres[i].draw(bg);
-                }
+                Arrays.stream(centres).forEach(centre -> centre.draw(bg));
 
-                // Each person is asked what state it is in, and gets the
-                // matching colour.
-                for (int i = 0; i < healthyPeople.length; i++) {
+                // Each person's state decides its colour. People who follow
+                // advice get a white ring so you can pick them out.
+                Arrays.stream(healthyPeople).forEach(person -> {
+                    bg.setColor(person.getColor());
+                    bg.fillOval(person.getXPos(), person.getYPos(), DOT_SIZE, DOT_SIZE);
 
-                    if (healthyPeople[i].isDead()) {
-                        bg.setColor(Color.gray);
-                    } else if (healthyPeople[i].isRecovered()) {
-                        bg.setColor(Color.cyan);
-                    } else if (healthyPeople[i].isInfected()) {
-                        bg.setColor(Color.yellow);
-                    } else {
-                        bg.setColor(Color.green);
+                    if (person.followsAdvice()) {
+                        bg.setColor(Color.white);
+                        bg.drawOval(person.getXPos() - 1, person.getYPos() - 1,
+                                    DOT_SIZE + 1, DOT_SIZE + 1);
                     }
-
-                    bg.fillOval(healthyPeople[i].getXPos(),
-                                healthyPeople[i].getYPos(),
-                                DOT_SIZE, DOT_SIZE);
-                }
+                });
 
                 bg.setColor(Color.red);
-                for (int i = 0; i < viruses.length; i++) {
-                    bg.fillOval(viruses[i].getXPos(),
-                                viruses[i].getYPos(),
-                                DOT_SIZE, DOT_SIZE);
-                }
+                Arrays.stream(viruses).forEach(virus ->
+                        bg.fillOval(virus.getXPos(), virus.getYPos(), DOT_SIZE, DOT_SIZE));
 
-                // Live counts in the top-left corner, all from the one
-                // generic count() method.
-                int infected    = count(healthyPeople, INFECTED);
-                int inTreatment = count(healthyPeople, IN_TREATMENT);
-                int recovered   = count(healthyPeople, RECOVERED);
-                int dead        = count(healthyPeople, DEAD);
-                int healthy     = healthyPeople.length - infected - recovered - dead;
-
-                bg.setColor(Color.white);
-                bg.drawString("Healthy: " + healthy
-                        + "    Infected: " + infected
-                        + " (in treatment: " + inTreatment + ")"
-                        + "    Recovered: " + recovered
-                        + "    Dead: " + dead, 10, 20);
+                drawStats(bg, healthyPeople, stats);
 
                 bg.dispose();
                 g.drawImage(buffer, 0, 0, null);
@@ -192,70 +153,69 @@ public class PanelDemo {
         f.setVisible(true);
 
         // ---------- the time function ----------
-        // Fires every TICK_MS. Each fire moves every object one random step
-        // (or counts down treatment), checks for contact and admissions,
-        // then asks the panel to redraw.
-        javax.swing.Timer timer = new javax.swing.Timer(TICK_MS, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-
-                for (int i = 0; i < healthyPeople.length; i++) {
-
-                    if (healthyPeople[i].isInTreatment()) {
-                        // Patients stay put inside the centre until they are cured.
-                        healthyPeople[i].updateTreatment(TICK_MS);
-                    } else if (!healthyPeople[i].isDead()) {
-                        // The speed comes from the person, not from a number typed
-                        // here, so an infected person slows down on its own.
-                        healthyPeople[i].moveRandom(healthyPeople[i].getSpeed(), SIM_WIDTH - DOT_SIZE, SIM_HEIGHT - DOT_SIZE);
-                    }
-                    // The dead stay where they fell.
-                }
-
-                for (int i = 0; i < viruses.length; i++) {
-                    viruses[i].moveRandom(2, SIM_WIDTH - DOT_SIZE, SIM_HEIGHT - DOT_SIZE);
-                }
-
-                checkInfections(healthyPeople, viruses);
-                checkAdmissions(healthyPeople, centres);
-
-                panel.repaint();
-            }
+        // ActionListener has one method, so the whole listener is a lambda.
+        javax.swing.Timer timer = new javax.swing.Timer(TICK_MS, e -> {
+            tick(healthyPeople, viruses, centres);
+            panel.repaint();
         });
 
         timer.start();
     }
 
+    // One step of the simulation: move everything, then check for contact
+    // and admissions.
+    private static void tick(Healthy[] healthyPeople, Virus[] viruses, RecoveryCentre[] centres) {
+
+        Arrays.stream(healthyPeople).forEach(person -> {
+            if (person.isInTreatment()) {
+                // Patients stay put inside the centre until they are cured.
+                person.updateTreatment(TICK_MS);
+            } else if (person.canMove()) {
+                // Speed comes from the state, and the route from the strategy.
+                person.moveRandom(person.getSpeed(), MAX_X, MAX_Y);
+            }
+            // The dead stay where they fell.
+        });
+
+        Arrays.stream(viruses).forEach(virus -> virus.moveRandom(2, MAX_X, MAX_Y));
+
+        checkInfections(healthyPeople, viruses);
+        checkAdmissions(healthyPeople, centres);
+    }
+
     // Every living person against every virus. What a new contact does is
-    // decided by the person (see Healthy.infect()): a healthy person gets
-    // infected, and an infected person hit a second time dies.
+    // decided by the person's state (see HealthState.virusContact).
+    //
+    // PARALLEL STREAM: people are split across several threads and checked at
+    // the same time. This is safe because:
+    //   - each person only ever changes its OWN fields here,
+    //   - viruses are only read (they already moved earlier in this tick),
+    //   - the one shared object the observers write to, OutbreakStats, is
+    //     synchronized.
+    // forEach waits for every thread to finish before returning, so paint()
+    // always sees a finished tick.
+    // Honest note: with only 70 people, splitting the work costs more than it
+    // saves. It pays off with thousands of people (try HEALTHY_COUNT = 5000).
     private static void checkInfections(Healthy[] healthyPeople, Virus[] viruses) {
 
-        for (int i = 0; i < healthyPeople.length; i++) {
+        Arrays.stream(healthyPeople)
+              .parallel()
+              .filter(person -> !person.isDead())
+              .forEach(person -> {
 
-            if (healthyPeople[i].isDead()) {
-                continue;
-            }
+                  boolean touching = Arrays.stream(viruses)
+                                           .anyMatch(virus -> isTouching(person, virus));
 
-            boolean touching = false;
-
-            for (int j = 0; j < viruses.length; j++) {
-                if (isTouching(healthyPeople[i], viruses[j])) {
-                    touching = true;
-                    break;
-                }
-            }
-
-            if (healthyPeople[i].isNewContact(touching)) {
-                try {
-                    healthyPeople[i].infect();
-                } catch (PersonDiedException ex) {
-                    // A second hit while already infected is fatal.
-                    healthyPeople[i].die();
-                    System.out.println(ex.getMessage());
-                }
-            }
-        }
+                  if (person.isNewContact(touching)) {
+                      try {
+                          person.infect();
+                      } catch (PersonDiedException ex) {
+                          // A second hit while already infected is fatal.
+                          // The death logger observer reports it.
+                          person.die();
+                      }
+                  }
+              });
     }
 
     // Any infected person who walks into a recovery centre gets admitted there.
@@ -263,24 +223,80 @@ public class PanelDemo {
     // to know whether it is a hospital or a medical camp.
     private static void checkAdmissions(Healthy[] healthyPeople, RecoveryCentre[] centres) {
 
-        for (int i = 0; i < healthyPeople.length; i++) {
+        Arrays.stream(healthyPeople)
+              .filter(Healthy::needsTreatment)
+              .forEach(person -> {
 
-            if (!healthyPeople[i].needsTreatment()) {
-                continue;
-            }
+                  // Use the middle of the dot, so "inside" means the dot is really in.
+                  int midX = person.getXPos() + DOT_SIZE / 2;
+                  int midY = person.getYPos() + DOT_SIZE / 2;
 
-            // Use the middle of the dot, so "inside" means the dot is really in.
-            int midX = healthyPeople[i].getXPos() + DOT_SIZE / 2;
-            int midY = healthyPeople[i].getYPos() + DOT_SIZE / 2;
+                  Arrays.stream(centres)
+                        .filter(centre -> centre.contains(midX, midY))
+                        .findFirst()
+                        .ifPresent(centre -> centre.admit(person));
+              });
+    }
 
-            for (int j = 0; j < centres.length; j++) {
+    // Two lines of live numbers in the top-left corner.
+    private static void drawStats(Graphics bg, Healthy[] healthyPeople, OutbreakStats stats) {
 
-                if (centres[j].contains(midX, midY)) {
-                    centres[j].admit(healthyPeople[i]);
-                    break;
-                }
-            }
+        // groupingBy: one pass over everyone, counted by status name.
+        // e.g. {Healthy=40, Infected=12, In treatment=3, Recovered=10, Dead=5}
+        Map<String, Long> byStatus = Arrays.stream(healthyPeople)
+                .collect(Collectors.groupingBy(Healthy::getStatus, Collectors.counting()));
+
+        // partitioningBy: split everyone into "follows advice" (true) and
+        // "doesn't" (false), and average 100-for-dead / 0-for-alive in each
+        // group. That average is the death rate as a percentage.
+        Map<Boolean, Double> deathRate = Arrays.stream(healthyPeople)
+                .collect(Collectors.partitioningBy(Healthy::followsAdvice,
+                         Collectors.averagingInt(person -> person.isDead() ? 100 : 0)));
+
+        // Our own generic count() still works, now with a lambda as the Check.
+        int headingToCare = count(healthyPeople,
+                                  person -> person.needsTreatment() && person.followsAdvice());
+
+        // Dark box behind the text so dots passing underneath don't hide it.
+        bg.setColor(new Color(0, 0, 0, 180));
+        bg.fillRect(4, 5, 720, 40);
+
+        bg.setColor(Color.white);
+        bg.drawString("Healthy: "         + byStatus.getOrDefault("Healthy", 0L)
+                    + "    Infected: "     + byStatus.getOrDefault("Infected", 0L)
+                    + "    In treatment: " + byStatus.getOrDefault("In treatment", 0L)
+                    + "    Recovered: "    + byStatus.getOrDefault("Recovered", 0L)
+                    + "    Dead: "         + byStatus.getOrDefault("Dead", 0L), 10, 20);
+
+        bg.drawString("Peak infected at once: " + stats.getPeakInfected()
+                    + "    Heading to a centre: " + headingToCare
+                    + "    Death rate - follows advice (ringed): " + Math.round(deathRate.get(true)) + "%"
+                    + "  vs  ignores advice: " + Math.round(deathRate.get(false)) + "%", 10, 38);
+    }
+
+    // Builds one random person, decides if they follow advice, and signs up
+    // the observers.
+    private static Healthy makePerson(int i, MovementStrategy goToCare,
+                                      StatusObserver stats, StatusObserver logger) {
+
+        int age = 18 + (int)(Math.random() * 50);
+        Healthy person = new Healthy("P" + (i + 1), age, randomX(), randomY());
+
+        if (Math.random() * 100 < ADVICE_PERCENT) {
+            person.setInfectedMovement(goToCare);
         }
+
+        person.addObserver(stats);
+        person.addObserver(logger);
+        return person;
+    }
+
+    private static int randomX() {
+        return (int)(Math.random() * MAX_X);
+    }
+
+    private static int randomY() {
+        return (int)(Math.random() * MAX_Y);
     }
 
     // Both dots are DOT_SIZE wide, so their centres are each offset by the same
@@ -296,17 +312,8 @@ public class PanelDemo {
     }
 
     // Generic method: counts how many items in an array pass a check.
-    // <T> is filled in by Java from the arguments, so it works for any type:
-    // here it's Healthy[] with a Check<Healthy>.
+    // check::test turns our own Check into the Predicate that filter() wants.
     private static <T> int count(T[] items, Check<T> check) {
-
-        int total = 0;
-
-        for (int i = 0; i < items.length; i++) {
-            if (check.test(items[i])) {
-                total++;
-            }
-        }
-        return total;
+        return (int) Arrays.stream(items).filter(check::test).count();
     }
 }

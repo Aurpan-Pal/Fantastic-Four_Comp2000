@@ -1,22 +1,27 @@
-public class Healthy extends Person{
+import java.awt.Color;
+import java.util.ArrayList;
+import java.util.List;
 
-    // Speeds live here because the object itself decides how fast it moves.
-    private static final int NORMAL_SPEED   = 6;
-    private static final int INFECTED_SPEED = 2;
+public class Healthy extends Person{
 
     // How long someone must be clear of every virus before a touch counts as
     // a new contact. 20 ticks = 1 second at 20 ticks a second.
     private static final int CLEAR_TICKS_NEEDED = 20;
 
-    // The person's state is held in these flags. No new class, no swapping the
-    // object out of the array -- the same Healthy object just starts behaving
-    // differently as they change.
-    private boolean infected = false;
-    private boolean recovered = false;
-    private boolean dead = false;
+    // STATE PATTERN: the person's health is one HealthState object instead of
+    // three boolean flags. Changing health means swapping this object. The
+    // Healthy object itself never leaves the array -- it just starts behaving
+    // differently because a different state is doing the work.
+    private HealthState state = new HealthyState();
 
-    // Treatment time still to go, in milliseconds. 0 means not being treated.
-    private int treatmentTimeLeft = 0;
+    // STRATEGY PATTERN: how this person walks normally, and how they walk
+    // while infected. For most people both are the same random walk. Someone
+    // who follows health advice gets HeadToNearestCentre for when infected.
+    private MovementStrategy normalMovement;
+    private MovementStrategy infectedMovement;
+
+    // OBSERVER PATTERN: everyone who wants to hear about health changes.
+    private final List<StatusObserver> observers = new ArrayList<>();
 
     // How many ticks in a row this person has not been touching any virus.
     // Dots overlap for several ticks when they pass each other, and the small
@@ -27,38 +32,81 @@ public class Healthy extends Person{
 
     public Healthy(String name, int age, int xPos, int yPos){
         super(name, age, xPos, yPos);
+        normalMovement = getMovement();
+        infectedMovement = normalMovement;
     }
 
     public Healthy(int id, String name, int age, int xPos, int yPos){
         super(id, name, age, xPos, yPos);
+        normalMovement = getMovement();
+        infectedMovement = normalMovement;
+    }
+
+    // ---------- state ----------
+
+    /**
+     * Swaps in a new health state, picks the matching way to walk, and tells
+     * every observer what changed. Only the states themselves (and die /
+     * startTreatment below) call this.
+     */
+    public void setState(HealthState newState){
+
+        HealthState oldState = state;
+        state = newState;
+
+        if (newState instanceof InfectedState){
+            setMovement(infectedMovement);
+        } else {
+            setMovement(normalMovement);
+        }
+
+        observers.forEach(observer -> observer.statusChanged(this, oldState, newState));
     }
 
     /**
-     * Called on each new contact with a virus.
-     * A healthy person becomes infected. An infected person has now been hit
-     * a second time, which is fatal, so this throws PersonDiedException.
-     * Recovered people are immune, patients are protected inside their
-     * centre, and the dead can't be hit again, so nothing happens to them.
+     * Called on each new contact with a virus. What happens is decided by the
+     * current state: a healthy person becomes infected, an infected person
+     * throws PersonDiedException (a second hit is fatal), and everyone else is
+     * left alone.
      */
     public void infect() throws PersonDiedException {
-
-        if (recovered || dead || isInTreatment()){
-            return;
-        }
-
-        if (infected){
-            throw new PersonDiedException(getName() + " has died");
-        }
-
-        infected = true;
+        state.virusContact(this);
     }
 
     /** Called when this person has been hit a second time. */
     public void die(){
-        dead = true;
-        infected = false;
-        treatmentTimeLeft = 0;
+        setState(new DeadState());
     }
+
+    /** Called by a recovery centre when this person is admitted. */
+    public void startTreatment(int milliseconds){
+        setState(new InTreatmentState(milliseconds));
+    }
+
+    /** Lets the state count down treatment. Does nothing in other states. */
+    public void updateTreatment(int elapsedMilliseconds){
+        state.tick(this, elapsedMilliseconds);
+    }
+
+    // ---------- strategy ----------
+
+    /** This person will walk using the given strategy whenever infected. */
+    public void setInfectedMovement(MovementStrategy movement){
+        this.infectedMovement = movement;
+    }
+
+    /** True if this person heads for a centre when infected. */
+    public boolean followsAdvice(){
+        return infectedMovement != normalMovement;
+    }
+
+    // ---------- observer ----------
+
+    public void addObserver(StatusObserver observer){
+        observers.add(observer);
+    }
+
+    // ---------- contact tracking ----------
 
     /**
      * Called once every tick with whether this person is touching a virus.
@@ -77,77 +125,43 @@ public class Healthy extends Person{
         return newContact;
     }
 
+    // ---------- questions about the person (answered by the state) ----------
+
     public boolean isInfected(){
-        return infected;
+        return state.isInfected();
     }
 
     public boolean isRecovered(){
-        return recovered;
+        return state instanceof RecoveredState;
     }
 
     public boolean isDead(){
-        return dead;
+        return state instanceof DeadState;
     }
 
     public boolean isInTreatment(){
-        return treatmentTimeLeft > 0;
+        return state instanceof InTreatmentState;
     }
 
     /** Infected, and not already being looked after at a recovery centre. */
     public boolean needsTreatment(){
-        return infected && !isInTreatment();
+        return state instanceof InfectedState;
     }
 
-    /** Called by a recovery centre when this person is admitted. */
-    public void startTreatment(int milliseconds){
-        treatmentTimeLeft = milliseconds;
+    public boolean canMove(){
+        return state.canMove();
     }
 
-    /**
-     * Counts treatment down by the time since the last tick. When it runs out,
-     * the person is cured and stays immune from then on.
-     */
-    public void updateTreatment(int elapsedMilliseconds){
-
-        if (!isInTreatment()){
-            return;
-        }
-
-        treatmentTimeLeft = treatmentTimeLeft - elapsedMilliseconds;
-
-        if (treatmentTimeLeft <= 0){
-            treatmentTimeLeft = 0;
-            infected = false;
-            recovered = true;
-        }
-    }
-
-    /**
-     * The object reports its own speed, so PanelDemo does not need to know the
-     * rule. Change the two numbers above and nothing else has to move.
-     * A recovered person is no longer infected, so they go back to normal speed.
-     */
     public int getSpeed(){
-        if (infected){
-            return INFECTED_SPEED;
-        }
-        return NORMAL_SPEED;
+        return state.getSpeed();
+    }
+
+    public Color getColor(){
+        return state.getColor();
     }
 
     @Override
     public String getStatus(){
-        if (dead){
-            return "Dead";
-        }
-        if (recovered){
-            return "Recovered";
-        }
-        if (isInTreatment()){
-            return "In treatment";
-        }
-        if (infected){
-            return "Infected";
-        }
-        return "Healthy";
+        return state.getName();
     }
 }

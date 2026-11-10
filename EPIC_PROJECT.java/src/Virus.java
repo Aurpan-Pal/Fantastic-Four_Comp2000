@@ -1,15 +1,13 @@
-public class Virus {
+public class Virus implements Movable {
 
     private String virusName;
     private int spreadPercentage;
     private int xPos;
     private int yPos;
 
-    private int dx;
-    private int dy;
-
-    // The speed used on the previous tick, so a change can be spotted.
-    private int currentSpeed;
+    // STRATEGY: viruses always random-walk. Each virus needs its own
+    // RandomWalk because the walk remembers its current direction.
+    private MovementStrategy movement = new RandomWalk();
 
     // Old constructor kept so Client.java still compiles.
     public Virus(String virusName, int spreadPercentage) {
@@ -35,96 +33,30 @@ public class Virus {
         this.spreadPercentage = spreadPercentage;
     }
 
+    @Override
     public int getXPos() {
         return xPos;
     }
 
+    @Override
     public int getYPos() {
         return yPos;
     }
 
+    @Override
     public void setXPos(int xPos) {
         this.xPos = xPos;
     }
 
+    @Override
     public void setYPos(int yPos) {
         this.yPos = yPos;
     }
 
-    // Same rule as Person: travel one way, wobble, new random direction at the wall.
+    // The walking code used to be copied here from Person. Now both just
+    // hand the job to a RandomWalk strategy.
     public void moveRandom(int speed, int maxX, int maxY) {
-
-        if (dx == 0 && dy == 0){
-            pickDirection(speed);
-        }
-        else if (speed != currentSpeed){
-            // Same fix as in Person. A virus never changes speed today, so this
-            // branch never runs -- it is here so the two moveRandom methods stay
-            // identical and do not quietly drift apart.
-            resizeStep(speed);
-        }
-
-        currentSpeed = speed;
-
-        int wobbleX = (int)(Math.random() * 3) - 1;
-        int wobbleY = (int)(Math.random() * 3) - 1;
-
-        xPos = xPos + dx + wobbleX;
-        yPos = yPos + dy + wobbleY;
-
-        boolean hitWall = false;
-
-        if (xPos < 0){
-            xPos = 0;
-            hitWall = true;
-        }
-        if (xPos > maxX){
-            xPos = maxX;
-            hitWall = true;
-        }
-        if (yPos < 0){
-            yPos = 0;
-            hitWall = true;
-        }
-        if (yPos > maxY){
-            yPos = maxY;
-            hitWall = true;
-        }
-
-        if (hitWall){
-            pickDirection(speed);
-
-            if (xPos <= 0 && dx < 0){ dx = -dx; }
-            if (xPos >= maxX && dx > 0){ dx = -dx; }
-            if (yPos <= 0 && dy < 0){ dy = -dy; }
-            if (yPos >= maxY && dy > 0){ dy = -dy; }
-        }
-    }
-
-    // Keep the direction we are already travelling, change only how far each
-    // step goes. atan2 recovers the current heading from dx and dy.
-    private void resizeStep(int speed){
-
-        double angle = Math.atan2(dy, dx);
-
-        dx = (int) Math.round(Math.cos(angle) * speed);
-        dy = (int) Math.round(Math.sin(angle) * speed);
-
-        if (dx == 0 && dy == 0){
-            dx = speed;
-        }
-    }
-
-    private void pickDirection(int speed){
-
-        double angle = Math.random() * Math.PI * 2;
-
-        dx = (int) Math.round(Math.cos(angle) * speed);
-        dy = (int) Math.round(Math.sin(angle) * speed);
-
-        if (dx == 0 && dy == 0){
-            dx = speed;
-        }
+        movement.move(this, speed, maxX, maxY);
     }
 
     @Override
