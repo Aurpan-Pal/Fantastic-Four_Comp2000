@@ -60,7 +60,7 @@ public class Healthy extends Person{
             setMovement(normalMovement);
         }
 
-        observers.forEach(observer -> observer.statusChanged(this, oldState, newState));
+        notifyObservers(oldState, newState);
     }
 
     /**
@@ -100,10 +100,22 @@ public class Healthy extends Person{
         return infectedMovement != normalMovement;
     }
 
-    // ---------- observer ----------
+    // ---------- observer (Healthy is the subject) ----------
 
     public void addObserver(StatusObserver observer){
         observers.add(observer);
+    }
+
+    // An observer that is no longer needed must be removed. Otherwise this
+    // list keeps a reference to it forever, so it can never be garbage
+    // collected (the "lapsed listener" memory leak).
+    public void removeObserver(StatusObserver observer){
+        observers.remove(observer);
+    }
+
+    // Tells every observer what changed.
+    private void notifyObservers(HealthState from, HealthState to){
+        observers.forEach(observer -> observer.statusChanged(this, from, to));
     }
 
     // ---------- contact tracking ----------

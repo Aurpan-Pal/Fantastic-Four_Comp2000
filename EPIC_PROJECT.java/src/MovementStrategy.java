@@ -8,7 +8,13 @@
  * Before this, Person and Virus each had their own identical copy of the
  * random-walk code (moveRandom, resizeStep, pickDirection). Now that code lives
  * once, in RandomWalk.
+ *
+ * It has a single method, so it is a functional interface. A strategy that
+ * needs to remember things between ticks (RandomWalk remembers its direction)
+ * is written as a class. A strategy with nothing to remember can be a lambda:
+ * see headToNearestCentre() in PanelDemo.
  */
+@FunctionalInterface
 public interface MovementStrategy {
 
     /** Moves the thing one step, keeping it inside 0..maxX and 0..maxY. */
